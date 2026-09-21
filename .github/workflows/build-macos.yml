@@ -88,9 +88,12 @@ jobs:
         run: |
           test -d dist/ScheduleToICS.app/Contents/MacOS
           test -x dist/ScheduleToICS.app/Contents/MacOS/ScheduleToICS
-          test -f dist/ScheduleToICS.app/Contents/Resources/icon.icns
+          echo "--- Resources 目录内容 ---"
+          ls -la dist/ScheduleToICS.app/Contents/Resources/
+          ICNS=$(find dist/ScheduleToICS.app/Contents/Resources -name "*.icns" | head -1)
+          test -n "$ICNS" || { echo "错误: 未找到 .icns 图标"; exit 1; }
           lipo -info dist/ScheduleToICS.app/Contents/MacOS/ScheduleToICS
-          echo "产物结构验证通过"
+          echo "产物结构验证通过，图标: $ICNS"
 
       - name: 压缩为 zip 并上传
         run: |
