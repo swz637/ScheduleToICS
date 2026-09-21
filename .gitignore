@@ -1,0 +1,8 @@
+# ── Git 忽略规则（上传 GitHub 时排除本地构建产物）──
+.venv/
+build/
+dist/
+__pycache__/
+*.pyc
+app_icon.icns
+.DS_Store

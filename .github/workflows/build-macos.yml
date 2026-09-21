@@ -1,0 +1,100 @@
+# ── 排班表转ICS：GitHub Actions macOS 云构建 ──
+# 无需 Mac 电脑，在 GitHub 云端 macOS 服务器上自动打包出 .app
+#
+# 触发方式（二选一）：
+#   1. 推送到 main / master 分支时自动构建
+#   2. 仓库页面 Actions → Build macOS App → Run workflow 手动构建
+#
+# 产物：Actions 页面下载 ScheduleToICS-macOS.zip，解压得到 ScheduleToICS.app
+# 该 .app 为 universal2 双架构（Intel 和 Apple Silicon 均可运行），macOS 10.15+
+
+name: Build macOS App
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python 3.12（官方 universal2 版，自带 tkinter）
+        run: |
+          curl -sSL -o /tmp/python.pkg "https://www.python.org/ftp/python/3.12.10/python-3.12.10-macos11.pkg"
+          sudo installer -pkg /tmp/python.pkg -target /
+          echo "/Library/Frameworks/Python.framework/Versions/3.12/bin" >> "$GITHUB_PATH"
+          python3 --version
+          python3 -c "import tkinter; print('tkinter OK, Tk', tkinter.TkVersion)"
+
+      - name: 安装依赖
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r requirements.txt
+
+      - name: 生成应用图标（PNG → ICNS）
+        run: |
+          ICONSET=".app_icon.iconset"
+          rm -rf "$ICONSET" && mkdir -p "$ICONSET"
+          for size in 16 32 128 256 512; do
+            sips -z "$size" "$size" app_icon.png --out "$ICONSET/icon_${size}x${size}.png" > /dev/null
+            sips -z "$((size * 2))" "$((size * 2))" app_icon.png --out "$ICONSET/icon_${size}x${size}@2x.png" > /dev/null
+          done
+          iconutil -c icns "$ICONSET" -o app_icon.icns
+          rm -rf "$ICONSET"
+          ls -la app_icon.icns
+
+      - name: macOS 运行验证（核心逻辑在 macOS 上实测）
+        run: |
+          python3 - <<'EOF'
+          import sys
+          sys.path.insert(0, '.')
+          from app import parse_schedule, generate_ics, name_to_pinyin
+          from openpyxl import Workbook
+
+          wb = Workbook(); ws = wb.active
+          ws.cell(1, 1, '日期')
+          days = [30, 31, 1, 2, 3, 4, 5]; weeks = ['六', '日', '一', '二', '三', '四', '五']
+          for i, (d, w) in enumerate(zip(days, weeks), start=2):
+              ws.cell(1, i, d); ws.cell(2, i, w)
+          ws.cell(2, 1, '姓名')
+          for r, (name, shifts) in enumerate([('张三', ['晚班', '中班', '休息', '早班', '早值', '晚班', '休息'])], start=3):
+              ws.cell(r, 1, name)
+              for i, s in enumerate(shifts, start=2):
+                  ws.cell(r, i, s)
+          wb.save('/tmp/test.xlsx')
+
+          dates, people = parse_schedule('/tmp/test.xlsx', 2026, 8)
+          ics = generate_ics(people[0]['name'], people[0]['days'])
+          assert len(dates) == 7 and len(people) == 1
+          assert people[0]['name'] == '张三' and name_to_pinyin('张三') == 'zhangsan'
+          assert ics.count('BEGIN:VEVENT') == 7
+          assert '2026-08-30' <= dates[0][1].strftime('%Y-%m-%d') <= '2026-09-05'
+          print('macOS 核心逻辑验证通过：7 天 / 1 人 / 跨月正确 / ICS 生成正确')
+          EOF
+
+      - name: 打包 .app（PyInstaller，universal2 双架构）
+        run: |
+          python3 -m PyInstaller --clean --noconfirm ScheduleToICS.spec
+
+      - name: 验证产物结构
+        run: |
+          test -d dist/ScheduleToICS.app/Contents/MacOS
+          test -x dist/ScheduleToICS.app/Contents/MacOS/ScheduleToICS
+          test -f dist/ScheduleToICS.app/Contents/Resources/icon.icns
+          lipo -info dist/ScheduleToICS.app/Contents/MacOS/ScheduleToICS
+          echo "产物结构验证通过"
+
+      - name: 压缩为 zip 并上传
+        run: |
+          cd dist && zip -r ../ScheduleToICS-macOS.zip ScheduleToICS.app && cd ..
+          ls -lh ScheduleToICS-macOS.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ScheduleToICS-macOS
+          path: ScheduleToICS-macOS.zip
+          if-no-files-found: error
